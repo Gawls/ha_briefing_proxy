@@ -1,0 +1,30 @@
+# Merge into the existing rest_command and sensor sections in configuration.yaml.
+rest_command:
+  morning_briefing_proxy:
+    url: !secret briefing_proxy_url
+    method: POST
+    content_type: "application/json"
+    timeout: 60
+    payload: >-
+      {{
+        {
+          "weather": weather,
+          "events": events
+        } | tojson
+      }}
+
+sensor:
+  - platform: rest
+    name: Morning Briefing Latest
+    unique_id: morning_briefing_latest
+    resource: "http://192.168.68.180:8000/briefing/latest"
+    method: GET
+    scan_interval: 300
+    value_template: "{{ value_json.updated_at | default('unknown', true) }}"
+    json_attributes:
+      - text
+      - audio_url
+      - updated_at
+      - character_count
+      - generation_mode
+      - warning

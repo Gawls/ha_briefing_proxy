@@ -1,0 +1,35 @@
+{
+  "name": "HA Briefing Proxy",
+  "slug": "ha_briefing_proxy",
+  "description": "Generates morning briefing text for Home Assistant TTS, with optional webhook delivery.",
+  "version": "1.1.0",
+  "arch": ["amd64", "aarch64"],
+  "startup": "services",
+  "boot": "auto",
+  "init": false,
+  "ingress": false,
+  "panel_icon": "mdi:bullhorn",
+  "ports": {
+    "8000/tcp": 8000
+  },
+  "ports_description": {
+    "8000/tcp": "HA Briefing Proxy API"
+  },
+  "options": {
+    "openai_api_key": "",
+    "openai_model": "gpt-5-mini",
+    "ha_webhook_url": "http://homeassistant:8123/api/webhook/morning_briefing_ai",
+    "send_webhook": false,
+    "nhl_team": "EDM"
+  },
+  "schema": {
+    "openai_api_key": "password",
+    "openai_model": "str",
+    "ha_webhook_url": "str?",
+    "send_webhook": "bool?",
+    "nabu_casa_url": "str?",
+    "nhl_team": "str",
+    "tts_model": "str?",
+    "tts_voice": "str?"
+  }
+}

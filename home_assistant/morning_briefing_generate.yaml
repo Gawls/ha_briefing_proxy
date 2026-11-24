@@ -1,0 +1,198 @@
+alias: Morning Briefing - Generate
+mode: single
+sequence:
+  - variables:
+      today_start: "{{ today_at('00:00:00') }}"
+      today_end: "{{ today_at('23:59:59') }}"
+      gawley_events: {}
+      brooklyn_events: {}
+      lucas_events: {}
+      lincoln_events: {}
+      briefing_response: {}
+
+  - action: calendar.get_events
+    continue_on_error: true
+    target:
+      entity_id: calendar.gawley_calendar
+    data:
+      start_date_time: "{{ today_start }}"
+      end_date_time: "{{ today_end }}"
+    response_variable: gawley_events
+
+  - action: calendar.get_events
+    continue_on_error: true
+    target:
+      entity_id: calendar.brooklyn
+    data:
+      start_date_time: "{{ today_start }}"
+      end_date_time: "{{ today_end }}"
+    response_variable: brooklyn_events
+
+  - action: calendar.get_events
+    continue_on_error: true
+    target:
+      entity_id: calendar.lucas
+    data:
+      start_date_time: "{{ today_start }}"
+      end_date_time: "{{ today_end }}"
+    response_variable: lucas_events
+
+  - action: calendar.get_events
+    continue_on_error: true
+    target:
+      entity_id: calendar.lincoln
+    data:
+      start_date_time: "{{ today_start }}"
+      end_date_time: "{{ today_end }}"
+    response_variable: lincoln_events
+
+  - variables:
+      gawley_result: >-
+        {{ gawley_events.get('calendar.gawley_calendar', gawley_events)
+           if gawley_events is mapping else {} }}
+      brooklyn_result: >-
+        {{ brooklyn_events.get('calendar.brooklyn', brooklyn_events)
+           if brooklyn_events is mapping else {} }}
+      lucas_result: >-
+        {{ lucas_events.get('calendar.lucas', lucas_events)
+           if lucas_events is mapping else {} }}
+      lincoln_result: >-
+        {{ lincoln_events.get('calendar.lincoln', lincoln_events)
+           if lincoln_events is mapping else {} }}
+
+  - variables:
+      gawley_ok: >-
+        {{ gawley_result is mapping and gawley_result.get('events') is sequence
+           and gawley_result.get('events') is not string
+           and gawley_result.get('events') is not mapping }}
+      brooklyn_ok: >-
+        {{ brooklyn_result is mapping and brooklyn_result.get('events') is sequence
+           and brooklyn_result.get('events') is not string
+           and brooklyn_result.get('events') is not mapping }}
+      lucas_ok: >-
+        {{ lucas_result is mapping and lucas_result.get('events') is sequence
+           and lucas_result.get('events') is not string
+           and lucas_result.get('events') is not mapping }}
+      lincoln_ok: >-
+        {{ lincoln_result is mapping and lincoln_result.get('events') is sequence
+           and lincoln_result.get('events') is not string
+           and lincoln_result.get('events') is not mapping }}
+
+  - variables:
+      gawley_list: "{{ gawley_result['events'] if gawley_ok else [] }}"
+      brooklyn_list: "{{ brooklyn_result['events'] if brooklyn_ok else [] }}"
+      lucas_list: "{{ lucas_result['events'] if lucas_ok else [] }}"
+      lincoln_list: "{{ lincoln_result['events'] if lincoln_ok else [] }}"
+      calendar_ok_all: "{{ gawley_ok and brooklyn_ok and lucas_ok and lincoln_ok }}"
+      calendar_failed_list: >-
+        {{
+          [
+            ('gawley' if not gawley_ok else none),
+            ('brooklyn' if not brooklyn_ok else none),
+            ('lucas' if not lucas_ok else none),
+            ('lincoln' if not lincoln_ok else none)
+          ] | reject('equalto', none) | list
+        }}
+
+  - if:
+      - condition: template
+        value_template: "{{ not calendar_ok_all }}"
+    then:
+      - action: persistent_notification.create
+        data:
+          title: "Morning Briefing: Calendar access issue"
+          message: >-
+            Couldn't fetch calendars: {{ calendar_failed_list | join(', ') }}.
+            Briefing will continue with available events, weather, and a
+            calendar-unavailable note.
+
+  - action: rest_command.morning_briefing_proxy
+    continue_on_error: true
+    data:
+      weather: "{{ states('sensor.st_albert_weather_ec_summary') }}"
+      events: >-
+        {{
+          {
+            "gawley": {"calendar.gawley_calendar": {"events": gawley_list}},
+            "brooklyn": {"calendar.brooklyn": {"events": brooklyn_list}},
+            "lucas": {"calendar.lucas": {"events": lucas_list}},
+            "lincoln": {"calendar.lincoln": {"events": lincoln_list}},
+            "meta": {
+              "calendar_ok_all": calendar_ok_all,
+              "calendar_failed_list": calendar_failed_list,
+              "calendar_note": (
+                "Calendar is temporarily unavailable; briefing may be missing events."
+                if not calendar_ok_all else ""
+              )
+            }
+          }
+        }}
+    response_variable: briefing_response
+
+  - variables:
+      briefing_http_status: >-
+        {{ briefing_response.get('status', 0) | int(0)
+           if briefing_response is mapping else 0 }}
+
+  - if:
+      - condition: template
+        value_template: "{{ briefing_http_status < 200 or briefing_http_status >= 300 }}"
+    then:
+      - action: persistent_notification.create
+        data:
+          title: "Morning Briefing: Generation failed"
+          message: >-
+            The local briefing proxy did not accept the request.
+            {{ 'No HTTP response was received.' if briefing_http_status == 0
+               else 'HTTP status: ' ~ briefing_http_status ~ '.' }}
+            Check the script trace and proxy logs.
+      - stop: "Morning briefing proxy request failed."
+        error: true
+
+  - variables:
+      briefing_result: >-
+        {{ briefing_response.get('content', {})
+           if briefing_response is mapping else {} }}
+
+  - if:
+      - condition: template
+        value_template: >-
+          {{ not (
+               briefing_result is mapping
+               and briefing_result.get('status') == 'ok'
+               and briefing_result.get('text') is string
+               and briefing_result.get('text') | trim | length > 0
+               and briefing_result.get('updated_at') is string
+               and briefing_result.get('updated_at') | trim | length > 0
+             ) }}
+    then:
+      - action: persistent_notification.create
+        data:
+          title: "Morning Briefing: Invalid proxy response"
+          message: >-
+            The proxy did not return a completed briefing with text and updated_at.
+            Confirm that HA Briefing Proxy 1.1.0 is installed and running.
+      - stop: "The proxy response did not contain fresh briefing text."
+        error: true
+
+  - if:
+      - condition: template
+        value_template: "{{ briefing_result.get('generation_mode') == 'fallback' }}"
+    then:
+      - action: persistent_notification.create
+        data:
+          title: "Morning Briefing: Weather fallback"
+          message: >-
+            AI text generation could not finish normally
+            ({{ briefing_result.get('warning', 'unknown error') }}).
+            Speaking the freshly generated weather fallback. Check the proxy log
+            and configured OpenAI text model.
+
+  - action: homeassistant.update_entity
+    continue_on_error: true
+    target:
+      entity_id: sensor.morning_briefing_latest
+
+  - action: script.morning_briefing_speak
+    data:
+      briefing_text: "{{ briefing_result['text'] }}"
